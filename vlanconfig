@@ -1,0 +1,14 @@
+# Sample vlan configuration
+# Fields can be saparated with white spaces 
+# All text after # is discarded
+#
+# Format:
+# IFNAME VLANNO IP_ADDR         MASK
+
+eth2	2500    10.10.10.37     /24			# Workstations
+
+#eth0	88	192.168.254.129	/28			# upLink
+#eth0	88	2001:db8:8004:1::192.168.5.129	/64	# IPv6 uplink
+#
+#eth1	10	192.168.0.254	/24			# Server network
+#eth1	10	2001:db8:8004:0064::1	/64		# ipv6 server
