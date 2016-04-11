@@ -1,0 +1,41 @@
+#!/usr/bin/env python
+
+import re
+import subprocess
+
+
+filename="/etc/vlanconfig"
+
+def vlan_add(eth, vlan):
+    cmd="vconfig add "+eth+" "+vlan
+    print subprocess.Popen(cmd, shell=True, stdout=subprocess.PIPE).stdout.read()
+    pass
+
+def vlan_ip_add(vlan, ip, mask):
+    cmd="ip address add dev "+vlan+" "+ip+mask
+    print subprocess.Popen(cmd, shell=True, stdout=subprocess.PIPE).stdout.read()
+    cmd="ip link set "+vlan+" up"
+    print subprocess.Popen(cmd, shell=True, stdout=subprocess.PIPE).stdout.read()
+    pass
+
+def vlan_up(conf):
+    # parse known variables
+    eth,vlanid,ip,mask=conf[:4]
+
+    # configure interfaces
+    vlan_add(eth,vlanid)
+    vlan_ip_add("vlan"+vlanid,ip,mask)
+    
+
+def parse(line):
+    cleanup=re.compile("#.*")
+    parse=re.compile("^([^\s]*)\s*([^\s]*)\s*([^\s]*)\s*([^\s]*)\s*([^\s]*)\s*([^\s]*)\s*([^\s]*)\s*([^\s]*)\s*([^\s]*)")
+    vlan_config=re.findall(parse,re.sub(cleanup,"",line))
+    if vlan_config[0][0]:
+        vlan_up(vlan_config[0])
+
+
+with open(filename) as f:
+    for line in f:
+        parse(line)           
+
