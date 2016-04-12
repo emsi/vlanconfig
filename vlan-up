@@ -5,26 +5,53 @@ import subprocess
 
 
 filename="/etc/vlanconfig"
+verbose=True
+dry_run=False
 
-def vlan_add(eth, vlan):
-    cmd="vconfig add "+eth+" "+vlan
-    print subprocess.Popen(cmd, shell=True, stdout=subprocess.PIPE).stdout.read()
+eth=[]
+
+def run_cmd(cmd):
+    stdout=":"
+    if verbose:
+        print cmd
+    if not dry_run:
+        stdout=subprocess.Popen(cmd, shell=True, stdout=subprocess.PIPE, stderr=subprocess.STDOUT).stdout.read()
+    if (stdout != "") and (stdout != ":"):
+        print stdout.rstrip()
+
+def vlan_add(eth, vlanid):
+    cmd="vconfig add %s %s" % (eth, vlanid)
+    run_cmd(cmd)
     pass
 
 def vlan_ip_add(vlan, ip, mask):
-    cmd="ip address add dev "+vlan+" "+ip+mask
-    print subprocess.Popen(cmd, shell=True, stdout=subprocess.PIPE).stdout.read()
-    cmd="ip link set "+vlan+" up"
-    print subprocess.Popen(cmd, shell=True, stdout=subprocess.PIPE).stdout.read()
+    cmd="ip address add dev %s %s%s" %(vlan, ip, mask)
+    run_cmd(cmd)
+    cmd="ip link set %s up" % vlan
+    run_cmd(cmd)
     pass
+
+def vlan_rate(eth, vlanid, rate):
+    vlan="vlan"+vlanid
+    cmd="tc qdisc del dev %s root" % vlan
+    run_cmd(cmd)
+    cmd="tc qdisc add dev %s root handle 1: htb r2q 1 default 1" % vlan
+    run_cmd(cmd)
+    cmd="tc class add dev %s parent 1:1 classid 1:1 htb quantum 1000000 rate %smbit ceil %smbit burst 6k" % (vlan,rate,rate)
+    run_cmd(cmd)
+    cmd="tc qdisc add dev %s parent 1:1 handle 10 sfq perturb 10" % vlan
+    run_cmd(cmd)
 
 def vlan_up(conf):
     # parse known variables
-    eth,vlanid,ip,mask=conf[:4]
+    eth,vlanid,ip,mask,rate=conf[:5]
 
     # configure interfaces
     vlan_add(eth,vlanid)
     vlan_ip_add("vlan"+vlanid,ip,mask)
+    
+    if rate:
+        vlan_rate(eth, vlanid, rate)
     
 
 def parse(line):
@@ -34,8 +61,8 @@ def parse(line):
     if vlan_config[0][0]:
         vlan_up(vlan_config[0])
 
+run_cmd("")
 
 with open(filename) as f:
     for line in f:
-        parse(line)           
-
+        parse(line)     
