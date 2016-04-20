@@ -226,6 +226,8 @@ if action=="stop" or action=="restart":
 
 if action=="start" or action=="restart":
     run_cmd("vconfig set_name_type VLAN_PLUS_VID_NO_PAD")
+    if not vlans or force_shaping: 
+        vlan_rate_force()
     if not vlans: vlan_rate_force()
     if force_shaping: vlan_rate_force()
     with open(filename) as f:
