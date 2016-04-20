@@ -1,0 +1,240 @@
+#!/usr/bin/env python
+
+import re
+import subprocess
+import argparse
+import os.path
+
+
+filename="/etc/vlanconfig"
+backfilename=filename+".back"
+vlanconfig_hash={}
+
+def parse_args():
+    parser = argparse.ArgumentParser()
+    parser.add_argument("action", default="restart", choices=["stop", "start", "restart"],
+                                help="Perform action {stop|start|restart}")
+    parser.add_argument('vlans', nargs='*',
+                                help='vlans to execute on (e.g. vlan2500 vlan100)')
+    parser.add_argument("-v", "--verbose", action="count", default=0,
+                                help="increase output verbosity")
+    parser.add_argument("--dry-run", action="store_true",
+                                help='run without actualy performing the commands')
+    parser.add_argument("--force-shaping", action="store_true",
+                                help='force full reset of shaping settings')
+
+    args = parser.parse_known_args()
+    #print args
+    globals().update(vars(args[0]))
+
+def run_cmd(cmd, ignore_errors=[]):
+    """
+    Run a TRUSTED shell command and return its return code (0 means success)
+    """
+    stdout=":"
+    if verbose>1:
+        print cmd
+
+    if not dry_run:
+        cmd_subprocess=subprocess.Popen(cmd, shell=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+        # make sure the process exited and read the output
+        r=cmd_subprocess.wait()
+        stdout=cmd_subprocess.stdout.read()
+        stdout+=cmd_subprocess.stderr.read()
+
+        if r==0:
+            if verbose and (stdout != "") and (stdout != ":"):
+                print stdout.rstrip()
+        else:
+            if cmd_subprocess.returncode in ignore_errors and verbose < 4: return cmd_subprocess.returncode
+            if verbose<2:
+                print cmd
+            if (stdout != "") and (stdout != ":"):
+                print stdout.rstrip()
+            if verbose>2:
+                if ignore_errors: print "IGNORING: ",ignore_errors
+                print "RETURNCODE: {0}".format(cmd_subprocess.returncode)
+        return cmd_subprocess.returncode
+    else:
+        return 0
+
+def update_back():
+    with open(backfilename,'w') as f:
+        for line in vlanconfig_hash:
+            f.write("\t".join(vlanconfig_hash[line]))
+            f.write("\n")
+
+def config_key(eth,vlanid,ip):
+    return eth+':'+vlanid if ':' in ip else eth+':'+vlanid+':ipv6'
+
+def vlan_ip_add(vlan, ip, mask):
+    cmd="ip address add dev %s %s%s" %(vlan, ip, mask)
+    run_cmd(cmd)
+    cmd="ip link set %s up" % vlan
+    run_cmd(cmd)
+
+def vlan_rate_force():
+    cmd="tc qdisc del dev eth0 root"
+    run_cmd(cmd)
+    cmd="tc qdisc add dev eth0 root handle 1: htb r2q 1 default 1"
+    run_cmd(cmd)
+    cmd="tc class add dev eth0 parent 1: classid 1:1 htb rate 4096mbit ceil 4096mbit"
+    run_cmd(cmd)
+    
+def vlan_rate(eth,vlanid,ip,mask,rate):
+    vlan="vlan"+vlanid
+    cmd="tc qdisc del dev %s root" % vlan
+    run_cmd(cmd,[2])
+    cmd="tc qdisc add dev %s root handle 1: htb r2q 1 default 1" % vlan
+    run_cmd(cmd)
+    cmd="tc class add dev %s parent 1:1 classid 1:1 htb quantum 1000000 rate %smbit ceil %smbit burst 6k" % (vlan,rate,rate)
+    run_cmd(cmd)
+    cmd="tc qdisc add dev %s parent 1:1 handle 10 sfq perturb 10" % vlan
+    run_cmd(cmd)
+    
+    # Assume that there is already a root qdisc and default class
+    # tc qdisc add dev eth0 root handle 1: htb r2q 1 default 1
+    # tc class add dev eth0 parent 1: classid 1:1 htb rate 4096mbit ceil 4096mbit
+    #cmd="tc qdisc del dev eth0 parent 1:%s handle %s sfq perturb 10" % (vlanid,vlanid)
+    #run_cmd(cmd,[2])
+    #cmd="tc filter del dev eth0 protocol ip parent 1:0 prio 10 u32 match ip src %s%s flowid 1:%s" % (ip,mask,vlanid)
+    #run_cmd(cmd,[2])
+    #cmd="tc class del dev eth0 parent 1:1 classid 1:%s htb quantum 1000000 rate %smbit ceil %smbit burst 6k" % (vlanid,rate,rate)
+    #run_cmd(cmd,[2])
+
+
+    cmd="tc class add dev eth0 parent 1:1 classid 1:%s htb quantum 1000000 rate %smbit ceil %smbit burst 6k" % (vlanid,rate,rate)
+    if run_cmd(cmd,[2])==2:
+        cmd="tc class change dev eth0 parent 1:1 classid 1:%s htb quantum 1000000 rate %smbit ceil %smbit burst 6k" % (vlanid,rate,rate)
+        run_cmd(cmd)
+    cmd="tc qdisc add dev eth0 parent 1:%s handle %s sfq perturb 10" % (vlanid,vlanid)
+    run_cmd(cmd,[2])
+    cmd="tc filter add dev eth0 protocol ip parent 1:0 prio 10 u32 match ip src %s%s flowid 1:%s" % (ip,mask,vlanid)
+    run_cmd(cmd)
+
+def vlan_stop(vlanname):
+    #cmd="ip link set %s down" % vlanname
+    #run_cmd(cmd)
+    cmd="vconfig rem "+vlanname
+    run_cmd(cmd,[4])
+
+def process_stop(key):
+    """
+    Process vlanconfig line and start (up) the configuration for it.
+    """
+    [eth,vlanid,ip,mask,rate]=vlanconfig_hash.get(key)
+
+    if not eth: return
+
+    vlan_stop('vlan'+vlanid)
+    if config_key(eth,vlanid,ip) in vlanconfig_hash: del vlanconfig_hash[config_key(eth,vlanid,ip)]
+
+def parse_line(line):
+    """
+    Parse configuration line and return configuration touple
+    """
+    cleanup=re.compile("#.*")
+    parse=re.compile("^([^\s]*)\s*([^\s]*)\s*([^\s]*)\s*([^\s]*)\s*([^\s]*)\s*([^\s]*)\s*([^\s]*)\s*([^\s]*)\s*([^\s]*)")
+    vlan_config=re.findall(parse,re.sub(cleanup,"",line))[0]
+    # parse known variables
+    eth,vlanid,ip,mask,rate=vlan_config[:5]
+
+    return eth,vlanid,ip,mask,rate
+
+def parse_back(line):
+    """
+    Parse backup vlanconfig line and strore settings in vlanconfig_hash
+    """
+    eth,vlanid,ip,mask,rate=parse_line(line)
+    if eth:
+        vlanconfig_hash[config_key(eth,vlanid,ip)]=eth,vlanid,ip,mask,rate
+
+def hash_back_file(filename):
+    """
+    Read and hash (remember) backup (previous) configuration.
+    It's used for stop and restart operations.
+    """
+    if not os.path.isfile(backfilename): return None
+    with open(backfilename) as f:
+        for line in f:
+            parse_back(line)
+
+def vlan_start(eth,vlanid,ip,mask,rate):
+    """
+    Configure given vlan interface.
+    Hash (remember) successfully configured.
+    """
+    # configure interfaces
+    cmd="vconfig add %s %s" % (eth, vlanid)
+    r=run_cmd(cmd,[3])
+    if not r or r==3:
+        vlan_ip_add("vlan"+vlanid,ip,mask)
+
+        if rate:
+            vlan_rate(eth,vlanid,ip,mask,rate)
+
+    # Hash config even if we failed to implement it
+    # it might happen that it was already configured
+    # so it's better to stay on a safe side
+    vlanconfig_hash[config_key(eth,vlanid,ip)]=eth,vlanid,ip,mask,rate
+
+
+def process_start(line):
+    """
+    Process vlanconfig line and start (up) the configuration for it.
+    When the sript is invoked without the vlans the configuration is performed
+    only newly added vlan interfaces, otherwise it's forced on all vlans specified.
+    """
+    eth,vlanid,ip,mask,rate=parse_line(line)
+    if not eth: return
+
+    if ('vlan'+vlanid in vlans) :
+        vlan_start(eth,vlanid,ip,mask,rate)
+        return
+
+    if not vlans:
+#        if config_key(eth,vlanid,ip) in vlanconfig_hash:
+#            print "ERROR: trying to add VLAN #%s to IF -:%s:-  already configured (try restart)" % (vlanid, eth)
+#        else:
+         vlan_start(eth,vlanid,ip,mask,rate)
+
+def print_config(intro):
+    if verbose>1:
+        print intro
+        for line in vlanconfig_hash:
+            print "\t".join(vlanconfig_hash[line])
+        print ""
+
+    
+    
+
+# MAIN
+parse_args()
+
+hash_back_file(filename)
+
+print_config("BACKUP CONFIG:")
+
+if action=="stop" or action=="restart":
+    if vlans:
+        for vlanname in vlans:
+            vlan_stop(vlanname)
+    else:
+        vc_hash=vlanconfig_hash.keys()
+        for key in vc_hash:
+            process_stop(key)
+
+if action=="start" or action=="restart":
+    run_cmd("vconfig set_name_type VLAN_PLUS_VID_NO_PAD")
+    if not vlans: vlan_rate_force()
+    if force_shaping: vlan_rate_force()
+    with open(filename) as f:
+        for line in f:
+            if action=="start":
+                process_start(line)
+            if action=="restart":
+                process_start(line)
+    update_back()
+
+print_config("\nCURRENT CONFIG:")
+
