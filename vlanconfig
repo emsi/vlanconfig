@@ -1,4 +1,4 @@
-#!/usr/bin/env python
+#!/usr/bin/env python3
 
 import re
 import subprocess
@@ -34,7 +34,7 @@ def run_cmd(cmd, ignore_errors=[]):
     """
     stdout=":"
     if verbose>1:
-        print cmd
+        print(cmd)
 
     if not dry_run:
         cmd_subprocess=subprocess.Popen(cmd, shell=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
@@ -45,16 +45,16 @@ def run_cmd(cmd, ignore_errors=[]):
 
         if r==0:
             if verbose and (stdout != "") and (stdout != ":"):
-                print stdout.rstrip()
+                print(stdout.rstrip())
         else:
             if cmd_subprocess.returncode in ignore_errors and verbose < 4: return cmd_subprocess.returncode
             if verbose<2:
-                print cmd
+                print(cmd)
             if (stdout != "") and (stdout != ":"):
-                print stdout.rstrip()
+                print(stdout.rstrip())
             if verbose>2:
-                if ignore_errors: print "IGNORING: ",ignore_errors
-                print "RETURNCODE: {0}".format(cmd_subprocess.returncode)
+                if ignore_errors: print("IGNORING: ",ignore_errors)
+                print("RETURNCODE: {0}".format(cmd_subprocess.returncode))
         return cmd_subprocess.returncode
     else:
         return 0
@@ -201,10 +201,10 @@ def process_start(line):
 
 def print_config(intro):
     if verbose>1:
-        print intro
+        print(intro)
         for line in vlanconfig_hash:
-            print "\t".join(vlanconfig_hash[line])
-        print ""
+            print("\t".join(vlanconfig_hash[line]))
+        print("")
 
     
     
@@ -213,7 +213,7 @@ def print_config(intro):
 parse_args()
 
 if not os.path.isfile(filename): 
-    print "ERROR: No %s file!" % filename
+    print("ERROR: No %s file!" % filename)
     sys.exit(0)
 
 hash_back_file(filename)
@@ -225,7 +225,7 @@ if action=="stop" or action=="restart":
         for vlanname in vlans:
             vlan_stop(vlanname)
     else:
-        vc_hash=vlanconfig_hash.keys()
+        vc_hash=list(vlanconfig_hash.keys())
         for key in vc_hash:
             process_stop(key)
 
